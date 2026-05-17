@@ -1,12 +1,25 @@
+import { useEffect } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { images } from "../constants/images";
 import { Ionicons } from "@expo/vector-icons";
+import { useAuth } from "@clerk/expo";
 
 export default function Onboarding() {
   const router = useRouter();
+  const { isSignedIn, isLoaded } = useAuth();
+
+  useEffect(() => {
+    if (isLoaded && isSignedIn) {
+      router.replace("/");
+    }
+  }, [isLoaded, isSignedIn]);
+
+  if (!isLoaded) {
+    return null; // Return nothing while loading the auth state
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>

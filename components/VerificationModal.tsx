@@ -17,13 +17,17 @@ interface VerificationModalProps {
   onClose: () => void;
   onSuccess: () => void;
   emailAddress: string;
+  onVerifyCode?: (code: string) => Promise<void>;
+  onResendCode?: () => Promise<void>;
 }
 
 export default function VerificationModal({ 
   visible, 
   onClose, 
   onSuccess, 
-  emailAddress 
+  emailAddress,
+  onVerifyCode,
+  onResendCode
 }: VerificationModalProps) {
   const [code, setCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
@@ -50,11 +54,25 @@ export default function VerificationModal({
       // Auto-submit when last digit is entered
       if (cleaned.length === 6) {
         setIsVerifying(true);
-        // Simulate beautiful network request verification
-        setTimeout(() => {
-          setIsVerifying(false);
-          onSuccess();
-        }, 800);
+        if (onVerifyCode) {
+          onVerifyCode(cleaned)
+            .then(() => {
+              setIsVerifying(false);
+              onSuccess();
+            })
+            .catch((err) => {
+              setIsVerifying(false);
+              setCode("");
+              const errorMsg = err.errors?.[0]?.message || err.message || "Invalid code. Please try again.";
+              alert(errorMsg);
+            });
+        } else {
+          // Fallback to simulated verification if no callback provided
+          setTimeout(() => {
+            setIsVerifying(false);
+            onSuccess();
+          }, 800);
+        }
       }
     }
   };
@@ -158,7 +176,21 @@ export default function VerificationModal({
               <Text className="text-body-small font-poppins text-text-secondary">
                 {"Didn't receive the code? "}
               </Text>
-              <TouchableOpacity onPress={() => setCode("")} activeOpacity={0.7}>
+              <TouchableOpacity 
+                onPress={async () => {
+                  setCode("");
+                  if (onResendCode) {
+                    try {
+                      await onResendCode();
+                      alert("A new verification code has been sent!");
+                    } catch (err: any) {
+                      const errorMsg = err.errors?.[0]?.message || err.message || "Failed to resend code.";
+                      alert(errorMsg);
+                    }
+                  }
+                }} 
+                activeOpacity={0.7}
+              >
                 <Text className="text-body-small font-poppins-semibold text-primary">
                   Resend
                 </Text>

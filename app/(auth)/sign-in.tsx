@@ -7,7 +7,8 @@ import {
   TouchableOpacity, 
   ScrollView,
   KeyboardAvoidingView,
-  Platform
+  Platform,
+  ActivityIndicator
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Image } from "expo-image";
@@ -15,25 +16,113 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { images } from "../../constants/images";
 import VerificationModal from "../../components/VerificationModal";
+import { useSignIn, useSSO, useAuth } from "@clerk/expo";
+import * as WebBrowser from "expo-web-browser";
+
+WebBrowser.maybeCompleteAuthSession();
 
 export default function SignIn() {
   const router = useRouter();
+  const { signIn, errors, fetchStatus } = useSignIn();
+  const { startSSOFlow } = useSSO();
+  const { isSignedIn } = useAuth();
   
-  // State for email form field (no password field for Sign In)
   const [email, setEmail] = useState("");
-  
-  // Modal visibility state
+  const [isLoading, setIsLoading] = useState(false);
   const [isModalVisible, setIsModalVisible] = useState(false);
 
-  const handleSignIn = () => {
-    if (!email) return; // Only trigger if email is provided
-    setIsModalVisible(true);
+  React.useEffect(() => {
+    if (isSignedIn) {
+      router.replace("/");
+    }
+  }, [isSignedIn]);
+
+  const handleSignIn = async () => {
+    if (!email) return;
+    
+    setIsLoading(true);
+    try {
+      const { error: createError } = await signIn.create({
+        identifier: email,
+      });
+      if (createError) {
+        const msg = createError.longMessage || createError.message || "Failed to initiate sign-in.";
+        alert(msg);
+        return;
+      }
+
+      const { error: sendError } = await signIn.emailCode.sendCode();
+      if (sendError) {
+        const msg = sendError.longMessage || sendError.message || "Failed to send verification code.";
+        alert(msg);
+        return;
+      }
+
+      setIsModalVisible(true);
+    } catch (err: any) {
+      const msg = err?.longMessage || err?.message || "Something went wrong. Please try again.";
+      alert(msg);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async (code: string) => {
+    const { error: verifyError } = await signIn.emailCode.verifyCode({ code });
+    if (verifyError) {
+      throw verifyError;
+    }
+
+    if (signIn.status === "complete") {
+      await signIn.finalize({
+        navigate: ({ session, decorateUrl }) => {
+          if (session?.currentTask) {
+            console.log(session?.currentTask);
+            return;
+          }
+          const url = decorateUrl("/");
+          router.replace(url as "/");
+        },
+      });
+    } else {
+      throw new Error(`Sign-in status: ${signIn.status}`);
+    }
   };
 
   const handleVerificationSuccess = () => {
     setIsModalVisible(false);
-    // Automatically navigate to the home route (/) when code verification is complete
     router.replace("/");
+  };
+
+  const handleResendCode = async () => {
+    const { error } = await signIn.emailCode.sendCode();
+    if (error) {
+      const msg = error.longMessage || error.message || "Failed to resend code.";
+      alert(msg);
+    }
+  };
+
+  const handleSocialSignIn = async (strategy: "oauth_google" | "oauth_facebook" | "oauth_apple") => {
+    try {
+      const { createdSessionId, setActive: setSessionActive } = await startSSOFlow({
+        strategy,
+        redirectUrl: "duolingoclone://oauth-callback",
+      });
+      
+      if (createdSessionId && setSessionActive) {
+        await setSessionActive({ session: createdSessionId });
+        router.replace("/");
+      }
+    } catch (err: any) {
+      console.error(err);
+      const errorMsg = err.errors?.[0]?.message || err.message || "Failed to sign in with social provider.";
+      alert(errorMsg);
+    }
+  };
+
+  const fieldError = (field: keyof typeof errors.fields) => {
+    const err = errors.fields[field];
+    return err?.message || null;
   };
 
   return (
@@ -42,7 +131,6 @@ export default function SignIn() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={{ flex: 1 }}
       >
-        {/* Header Back Button */}
         <View className="px-6 pt-2 flex-row items-center justify-between">
           <TouchableOpacity 
             onPress={() => router.back()} 
@@ -59,7 +147,6 @@ export default function SignIn() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Mascot Illustration */}
           <View className="items-center mt-2 mb-4">
             <Image 
               source={images.mascotAuth} 
@@ -68,7 +155,6 @@ export default function SignIn() {
             />
           </View>
 
-          {/* Heading */}
           <View className="px-6 mb-6">
             <Text className="text-h1 font-poppins-bold text-text-primary text-center leading-tight">
               Welcome back
@@ -78,9 +164,7 @@ export default function SignIn() {
             </Text>
           </View>
 
-          {/* Inputs Section */}
           <View className="px-6 gap-4">
-            {/* Email Input */}
             <View className="bg-surface border border-border rounded-2xl px-4 py-2.5">
               <Text className="text-caption font-poppins-medium text-text-secondary">Email</Text>
               <TextInput
@@ -92,25 +176,33 @@ export default function SignIn() {
                 autoCorrect={false}
                 value={email}
                 onChangeText={setEmail}
+                editable={!isLoading}
               />
             </View>
+            {fieldError("identifier") && (
+              <Text className="text-red-500 font-poppins text-caption -mt-2">
+                {fieldError("identifier")}
+              </Text>
+            )}
 
-            {/* Main Action Button */}
             <TouchableOpacity
               onPress={handleSignIn}
               activeOpacity={0.9}
               className={`bg-primary border-b-4 border-primary-deep rounded-2xl h-14 justify-center items-center mt-4 shadow-sm ${
-                !email ? "opacity-60" : ""
+                !email || isLoading || fetchStatus === "fetching" ? "opacity-60" : ""
               }`}
-              disabled={!email}
+              disabled={!email || isLoading || fetchStatus === "fetching"}
             >
-              <Text className="text-white font-poppins-bold text-body-large">
-                Sign In
-              </Text>
+              {isLoading ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text className="text-white font-poppins-bold text-body-large">
+                  Sign In
+                </Text>
+              )}
             </TouchableOpacity>
           </View>
 
-          {/* Divider */}
           <View className="flex-row items-center my-6 px-6">
             <View className="flex-1 h-[1px] bg-border" />
             <Text className="mx-4 text-body-small font-poppins-medium text-text-secondary">
@@ -119,12 +211,11 @@ export default function SignIn() {
             <View className="flex-1 h-[1px] bg-border" />
           </View>
 
-          {/* Social Auth Buttons */}
           <View className="px-6 gap-3">
-            {/* Google */}
             <TouchableOpacity
               activeOpacity={0.85}
               className="flex-row items-center justify-center bg-white border border-border rounded-2xl h-14 px-4 shadow-sm relative"
+              onPress={() => handleSocialSignIn("oauth_google")}
             >
               <Ionicons name="logo-google" size={20} color="#EA4335" style={styles.socialIcon} />
               <Text className="text-text-primary font-poppins-bold text-body-medium">
@@ -132,10 +223,10 @@ export default function SignIn() {
               </Text>
             </TouchableOpacity>
 
-            {/* Facebook */}
             <TouchableOpacity
               activeOpacity={0.85}
               className="flex-row items-center justify-center bg-white border border-border rounded-2xl h-14 px-4 shadow-sm relative"
+              onPress={() => handleSocialSignIn("oauth_facebook")}
             >
               <Ionicons name="logo-facebook" size={20} color="#1877F2" style={styles.socialIcon} />
               <Text className="text-text-primary font-poppins-bold text-body-medium">
@@ -143,10 +234,10 @@ export default function SignIn() {
               </Text>
             </TouchableOpacity>
 
-            {/* Apple */}
             <TouchableOpacity
               activeOpacity={0.85}
               className="flex-row items-center justify-center bg-white border border-border rounded-2xl h-14 px-4 shadow-sm relative"
+              onPress={() => handleSocialSignIn("oauth_apple")}
             >
               <Ionicons name="logo-apple" size={20} color="#000000" style={styles.socialIcon} />
               <Text className="text-text-primary font-poppins-bold text-body-medium">
@@ -155,7 +246,6 @@ export default function SignIn() {
             </TouchableOpacity>
           </View>
 
-          {/* Toggle Screen Option */}
           <View className="flex-row items-center justify-center mt-8 pb-8">
             <Text className="text-body-medium font-poppins text-text-secondary">
               {"Don't have an account? "}
@@ -166,16 +256,16 @@ export default function SignIn() {
               </Text>
             </TouchableOpacity>
           </View>
-
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Verification Modal Component */}
       <VerificationModal
         visible={isModalVisible}
         onClose={() => setIsModalVisible(false)}
         onSuccess={handleVerificationSuccess}
         emailAddress={email}
+        onVerifyCode={handleVerifyCode}
+        onResendCode={handleResendCode}
       />
     </SafeAreaView>
   );
